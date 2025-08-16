@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"sync/atomic"
 )
 
@@ -17,12 +20,66 @@ func (cfg *apiConfig) middlewareMetricInc(next http.Handler) http.Handler {
 	})
 }
 
-func (cfg *apiConfig) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte(fmt.Sprintf("Hits: %v", cfg.fileserverHits.Load())))
+func (cfg *apiConfig) getMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/hmtl")
+	content := fmt.Sprintf(`<html>
+  <body>
+    <h1>Welcome, Chirpy Admin</h1>
+    <p>Chirpy has been visited %d times!</p>
+  </body>
+</html>`, cfg.fileserverHits.Load())
+	w.Write([]byte(content))
 }
 
 func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits.Store(0)
+}
+
+func resporespondWithError(w http.ResponseWriter, code int, msg string) {
+	w.WriteHeader(code)
+	resp := errorResp{
+		Err: msg,
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		w.WriteHeader(500)
+		return
+	}
+	w.Write(data)
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+	w.WriteHeader(code)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		w.WriteHeader(500)
+		return
+	}
+	w.Write(data)	
+}
+
+func cleaningText(t string) string {
+	badWords := []string{"kerfuffle", "sharbert", "fornax"}
+	words := strings.Split(t, " ")
+	for i, word := range words {
+		if slices.Contains(badWords, strings.ToLower(word)) {
+			words[i] = "****"
+		}
+	}
+
+	return strings.Join(words, " ")
+}
+
+type parameters struct {
+	Body string `json:"body"`
+}
+
+type errorResp struct {
+	Err string `json:"error"`
+}
+
+type response struct {
+	CleanedBody string `json:"cleaned_body"`
 }
 
 func main() {
@@ -30,12 +87,31 @@ func main() {
 	cfg := &apiConfig{}
 	fmt.Println(cfg.fileserverHits.Load())
 	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricInc(http.FileServer(http.Dir(".")))))
-	mux.Handle("/metrics", cfg)
-	mux.HandleFunc("/reset", cfg.resetHandler)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/admin/metrics", cfg.getMetrics)
+	mux.HandleFunc("/admin/reset", cfg.resetHandler)
+	mux.HandleFunc("/api/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
+	})
+
+	mux.HandleFunc("POST /api/validate_chirp", func(w http.ResponseWriter, r *http.Request) {
+
+		decoder := json.NewDecoder(r.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			resporespondWithError(w, 500, "Something went wrong")
+			return
+		}
+		if len(params.Body) > 140 {
+			resporespondWithError(w, 400, "Chirp is too long")
+			return
+		}
+		resp := response{
+			CleanedBody: cleaningText(params.Body), 
+		}
+		respondWithJSON(w, 200, resp)
 	})
 
 	server := http.Server{
