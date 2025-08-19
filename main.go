@@ -1,5 +1,6 @@
 package main
 
+import _ "github.com/lib/pq"
 import (
 	"encoding/json"
 	"fmt"
@@ -7,6 +8,12 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"github.com/joho/godotenv"
+	"os"
+	"database/sql"
+	"github.com/mrtuandao/chirpy/internal/database"
+	"github.com/google/uuid"
+	"time"
 )
 
 type apiConfig struct {
@@ -70,19 +77,40 @@ func cleaningText(t string) string {
 	return strings.Join(words, " ")
 }
 
-type parameters struct {
+type createChirpReq struct {
 	Body string `json:"body"`
+	UserID string `json:"user_id"`
+}
+
+type createUserReq struct {
+	Email string `json:"email"`
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
 }
 
 type errorResp struct {
 	Err string `json:"error"`
 }
 
-type response struct {
-	CleanedBody string `json:"cleaned_body"`
-}
-
 func main() {
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, _ := sql.Open("postgres", dbURL)
+	dbQueries := database.New(db)
+
 	mux := http.NewServeMux()
 	cfg := &apiConfig{}
 	fmt.Println(cfg.fileserverHits.Load())
@@ -95,23 +123,82 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
-	mux.HandleFunc("POST /api/validate_chirp", func(w http.ResponseWriter, r *http.Request) {
-
+	mux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
 		decoder := json.NewDecoder(r.Body)
-		params := parameters{}
-		err := decoder.Decode(&params)
+		chirp_sent := createChirpReq{}
+		err := decoder.Decode(&chirp_sent)
 		if err != nil {
 			resporespondWithError(w, 500, "Something went wrong")
 			return
 		}
-		if len(params.Body) > 140 {
+		if len(chirp_sent.Body) > 140 {
 			resporespondWithError(w, 400, "Chirp is too long")
 			return
 		}
-		resp := response{
-			CleanedBody: cleaningText(params.Body), 
+		user_id, err := uuid.Parse(chirp_sent.UserID)
+		if err != nil {
+			resporespondWithError(w, 500, fmt.Sprintf("Can not create chirp: %v", err))
+			return 
 		}
-		respondWithJSON(w, 200, resp)
+		db_chirp, err := dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{
+			Body: sql.NullString{
+				String: chirp_sent.Body, 
+				Valid: true, 
+			}, 
+			UserID: uuid.NullUUID{
+				UUID: user_id, 
+				Valid: true, 
+			},
+		})
+
+		if err != nil {
+			resporespondWithError(w, 500, fmt.Sprintf("Can not create chirp: %v", err))
+			return 
+		}
+		
+		chirp := Chirp{
+			ID: db_chirp.ID, 
+			CreatedAt: db_chirp.CreatedAt.Time, 
+			UpdatedAt: db_chirp.UpdatedAt.Time, 
+			Body: db_chirp.Body.String, 
+			UserID: db_chirp.UserID.UUID,
+		}
+		respondWithJSON(w, 201, chirp)
+	})
+
+	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
+		decoder := json.NewDecoder(r.Body)
+		create_user_req := createUserReq{}
+		err := decoder.Decode(&create_user_req)
+		if err != nil {
+			resporespondWithError(w, 500, "Something went wrong")
+		}
+		fmt.Printf("Adding user with email: %v", create_user_req.Email)
+		db_user, err := dbQueries.CreateUser(r.Context(), sql.NullString{
+			String: create_user_req.Email,
+			Valid: true,
+		})
+		if err != nil {
+			resporespondWithError(w, 500, fmt.Sprintf("Can not create user %v", err))
+			return 
+		}
+		user := User{
+			ID: db_user.ID, 
+			CreatedAt: db_user.CreatedAt.Time, 
+			UpdatedAt: db_user.UpdatedAt.Time,
+			Email: db_user.Email.String,
+		}
+
+		respondWithJSON(w, 201, user)
+	})
+
+	mux.HandleFunc("POST /admin/reset", func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("PLATFORM") != "dev" {
+			resporespondWithError(w, 403, "Go away kids")
+			return 
+		}
+		db.Query("DELETE FROM users")
+		w.WriteHeader(200)
 	})
 
 	server := http.Server{
