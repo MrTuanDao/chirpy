@@ -42,7 +42,7 @@ func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits.Store(0)
 }
 
-func resporespondWithError(w http.ResponseWriter, code int, msg string) {
+func respondWithError(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
 	resp := errorResp{
 		Err: msg,
@@ -123,21 +123,68 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
+	mux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		items, err := dbQueries.GetAllChirps(r.Context())
+		if err != nil {
+			respondWithError(w, 500, fmt.Sprintf("Can not get all chirps: %v", err))
+			return 			
+		}
+		chirps := []Chirp{}
+		for _, chirp := range items {
+			chirps = append(chirps, Chirp{
+				ID: chirp.ID, 
+				CreatedAt: chirp.CreatedAt.Time, 
+				UpdatedAt: chirp.UpdatedAt.Time, 
+				Body: chirp.Body.String, 
+				UserID: chirp.UserID.UUID,
+			})
+		}
+
+		respondWithJSON(w, 200, chirps)
+	})
+
+	mux.HandleFunc("GET /api/chirps/{chirpID}", func(w http.ResponseWriter, r *http.Request) {
+		chirpID := r.PathValue("chirpID")
+		fmt.Printf("chirpID: %v\n", chirpID)
+		idDB, err := uuid.Parse(chirpID)
+		fmt.Printf("idDB: %v\n", idDB)
+		if err != nil {
+			respondWithError(w, 404, fmt.Sprintf("Can not create chirp: %v", err))
+			return 
+		}
+		chirpInDB, err := dbQueries.GetChirpByID(r.Context(), idDB)
+		if err != nil {
+			respondWithError(w, 404, fmt.Sprintf("Can not create chirp: %v", err))
+			return 
+		}
+		// if chirpInDB.ID == nil {
+		// 	respondWithError(w, 404, "Not found")
+		// }
+		chirp := Chirp{
+			ID: chirpInDB.ID,
+			CreatedAt: chirpInDB.CreatedAt.Time,
+			UpdatedAt: chirpInDB.UpdatedAt.Time,
+			Body: chirpInDB.Body.String,
+			UserID: chirpInDB.UserID.UUID,
+		}
+		respondWithJSON(w, 200, chirp)
+	})
+
 	mux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
 		decoder := json.NewDecoder(r.Body)
 		chirp_sent := createChirpReq{}
 		err := decoder.Decode(&chirp_sent)
 		if err != nil {
-			resporespondWithError(w, 500, "Something went wrong")
+			respondWithError(w, 500, "Something went wrong")
 			return
 		}
 		if len(chirp_sent.Body) > 140 {
-			resporespondWithError(w, 400, "Chirp is too long")
+			respondWithError(w, 400, "Chirp is too long")
 			return
 		}
 		user_id, err := uuid.Parse(chirp_sent.UserID)
 		if err != nil {
-			resporespondWithError(w, 500, fmt.Sprintf("Can not create chirp: %v", err))
+			respondWithError(w, 500, fmt.Sprintf("Can not create chirp: %v", err))
 			return 
 		}
 		db_chirp, err := dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{
@@ -152,7 +199,7 @@ func main() {
 		})
 
 		if err != nil {
-			resporespondWithError(w, 500, fmt.Sprintf("Can not create chirp: %v", err))
+			respondWithError(w, 500, fmt.Sprintf("Can not create chirp: %v", err))
 			return 
 		}
 		
@@ -171,15 +218,14 @@ func main() {
 		create_user_req := createUserReq{}
 		err := decoder.Decode(&create_user_req)
 		if err != nil {
-			resporespondWithError(w, 500, "Something went wrong")
+			respondWithError(w, 500, "Something went wrong")
 		}
-		fmt.Printf("Adding user with email: %v", create_user_req.Email)
 		db_user, err := dbQueries.CreateUser(r.Context(), sql.NullString{
 			String: create_user_req.Email,
 			Valid: true,
 		})
 		if err != nil {
-			resporespondWithError(w, 500, fmt.Sprintf("Can not create user %v", err))
+			respondWithError(w, 500, fmt.Sprintf("Can not create user %v", err))
 			return 
 		}
 		user := User{
@@ -194,7 +240,7 @@ func main() {
 
 	mux.HandleFunc("POST /admin/reset", func(w http.ResponseWriter, r *http.Request) {
 		if os.Getenv("PLATFORM") != "dev" {
-			resporespondWithError(w, 403, "Go away kids")
+			respondWithError(w, 403, "Go away kids")
 			return 
 		}
 		db.Query("DELETE FROM users")

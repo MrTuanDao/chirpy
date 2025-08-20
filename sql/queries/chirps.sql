@@ -7,3 +7,9 @@ VALUES (
 	$2
 )
 RETURNING *;
+
+-- name: GetAllChirps :many
+SELECT * FROM chirps ORDER BY created_at ASC;
+
+-- name: GetChirpByID :one
+SELECT * from chirps where id = $1::uuid;
