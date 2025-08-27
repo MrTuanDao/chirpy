@@ -1,19 +1,21 @@
 package main
 
-import _ "github.com/lib/pq"
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
-	"github.com/joho/godotenv"
-	"os"
-	"database/sql"
-	"github.com/mrtuandao/chirpy/internal/database"
-	"github.com/google/uuid"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
+	"github.com/mrtuandao/chirpy/internal/auth"
+	"github.com/mrtuandao/chirpy/internal/database"
 )
 
 type apiConfig struct {
@@ -84,6 +86,12 @@ type createChirpReq struct {
 
 type createUserReq struct {
 	Email string `json:"email"`
+	Password string `json:"password"`
+}
+
+type loginReq struct {
+	Email string `json:"email"`
+	Password string `json:"password"`
 }
 
 type User struct {
@@ -220,10 +228,21 @@ func main() {
 		if err != nil {
 			respondWithError(w, 500, "Something went wrong")
 		}
-		db_user, err := dbQueries.CreateUser(r.Context(), sql.NullString{
-			String: create_user_req.Email,
-			Valid: true,
-		})
+		hashed_password, err := auth.HashPassword(create_user_req.Password)
+		if err != nil {
+			respondWithError(w, 500, fmt.Sprintf("Can not create user %v", err))
+			return 
+		}
+		db_user, err := dbQueries.CreateUser(
+			r.Context(), 
+			database.CreateUserParams{
+				Email: sql.NullString{
+					String: create_user_req.Email,
+					Valid: true,
+				},
+				HashedPassword: hashed_password,
+			},
+		)
 		if err != nil {
 			respondWithError(w, 500, fmt.Sprintf("Can not create user %v", err))
 			return 
@@ -236,6 +255,36 @@ func main() {
 		}
 
 		respondWithJSON(w, 201, user)
+	})
+
+	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		decoder := json.NewDecoder(r.Body)
+		login_req := loginReq{}
+		err := decoder.Decode(&login_req)
+		if err != nil {
+			respondWithError(w, 500, "Something went wrong")
+			return
+		}
+		user, err := dbQueries.GetUserByEmail(
+			r.Context(), 
+			sql.NullString{
+				String: login_req.Email, 
+				Valid: true,
+		})
+		if err != nil {
+			respondWithError(w, 500, "Something went wrong")
+			return
+		}
+		if err := auth.CheckPasswordHash(login_req.Password, user.HashedPassword); err != nil {
+			respondWithError(w, 401, "")
+			return 
+		}
+		respondWithJSON(w, 200, map[string]interface{}{
+			"id": user.ID, 
+			"created_at": user.CreatedAt.Time,
+			"updated_at": user.UpdatedAt.Time,
+			"email": user.Email.String, 
+		})
 	})
 
 	mux.HandleFunc("POST /admin/reset", func(w http.ResponseWriter, r *http.Request) {
