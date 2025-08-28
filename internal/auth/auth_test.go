@@ -34,3 +34,22 @@ func TestJWT(t *testing.T) {
 		t.Errorf(`ValidateJWT(%q, %q) = %q, %v, want %v, nil`, tokenString, tokenSecret, valUUID, err, userId)
 	}
 }
+
+func TestJWTExpired(t *testing.T) {
+	tokenSecret := "123456"
+	userId, err := uuid.Parse("be93db0d-4c6d-49cf-b56d-ba22392eb160")
+	if err != nil {
+		t.Errorf(`err should be nil, err: %v`, err)
+	}
+	expiresIn := 1 * time.Second
+	tokenString, err := MakeJWT(userId, tokenSecret, expiresIn)
+	if err != nil {
+		t.Errorf(`err should be nil, err: %v`, err)
+	}
+
+	time.Sleep(2* time.Second)
+	valUUID, err := ValidateJWT(tokenString, tokenSecret)
+	if err == nil || userId == valUUID {
+		t.Errorf(`ValidateJWT(%q, %q) = %q, %v, want nil, not nil`, tokenString, tokenSecret, valUUID, err)
+	}	
+}
