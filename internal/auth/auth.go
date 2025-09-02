@@ -1,12 +1,28 @@
 package auth
 
 import (
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
+
+func GetBearerToken(headers http.Header) (string, error) {
+	authorization := headers.Get("Authorization")
+	if authorization == "" {
+		return "", errors.New("no header Authorization")
+	}
+	token, found := strings.CutPrefix(authorization, "Bearer ")
+	if !found {
+		return "", errors.New("not found format Bearer")
+	}
+	return token, nil
+}
 
 func HashPassword(password string) (string, error) {
 	hashed, err := bcrypt.GenerateFromPassword([]byte(password), 0)
@@ -33,6 +49,7 @@ func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (str
 			Subject:   userID.String(),
 		},
 	)
+	fmt.Printf("jwt.NumericDate{time.Now().Add(expiresIn)}: %v\n", jwt.NumericDate{time.Now().Add(expiresIn)})
 	return token.SignedString([]byte(tokenSecret))
 }
 

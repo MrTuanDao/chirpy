@@ -20,6 +20,7 @@ import (
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	jwtSecret string
 }
 
 func (cfg *apiConfig) middlewareMetricInc(next http.Handler) http.Handler {
@@ -81,7 +82,7 @@ func cleaningText(t string) string {
 
 type createChirpReq struct {
 	Body string `json:"body"`
-	UserID string `json:"user_id"`
+	// UserID string `json:"user_id"`
 }
 
 type createUserReq struct {
@@ -92,6 +93,7 @@ type createUserReq struct {
 type loginReq struct {
 	Email string `json:"email"`
 	Password string `json:"password"`
+	ExpiresInSeconds int `json:"expires_in_seconds"`
 }
 
 type User struct {
@@ -120,7 +122,9 @@ func main() {
 	dbQueries := database.New(db)
 
 	mux := http.NewServeMux()
-	cfg := &apiConfig{}
+	cfg := &apiConfig{
+		jwtSecret: os.Getenv("JWT_SECRET"),
+	}
 	fmt.Println(cfg.fileserverHits.Load())
 	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricInc(http.FileServer(http.Dir(".")))))
 	mux.HandleFunc("/admin/metrics", cfg.getMetrics)
@@ -190,10 +194,15 @@ func main() {
 			respondWithError(w, 400, "Chirp is too long")
 			return
 		}
-		user_id, err := uuid.Parse(chirp_sent.UserID)
+		token, err := auth.GetBearerToken(r.Header)
 		if err != nil {
 			respondWithError(w, 500, fmt.Sprintf("Can not create chirp: %v", err))
 			return 
+		}
+		user_id, err := auth.ValidateJWT(token, cfg.jwtSecret)
+		if err != nil {
+			respondWithError(w, 401, err.Error())
+			return
 		}
 		db_chirp, err := dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{
 			Body: sql.NullString{
@@ -279,11 +288,17 @@ func main() {
 			respondWithError(w, 401, "")
 			return 
 		}
+		expires_in_seconds := login_req.ExpiresInSeconds
+		if expires_in_seconds == 0 {
+			expires_in_seconds = 3600
+		}
+		token, _ := auth.MakeJWT(user.ID, cfg.jwtSecret, time.Duration(expires_in_seconds) * time.Second)
 		respondWithJSON(w, 200, map[string]interface{}{
 			"id": user.ID, 
 			"created_at": user.CreatedAt.Time,
 			"updated_at": user.UpdatedAt.Time,
 			"email": user.Email.String, 
+			"token": token, 
 		})
 	})
 

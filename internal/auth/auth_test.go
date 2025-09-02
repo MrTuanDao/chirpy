@@ -2,12 +2,32 @@ package auth
 
 import (
 	// "fmt"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
+
+func TestGetBearerToken(t *testing.T) {
+	myHeadersMap := map[string]string{
+		"Content-Type": "application/json",
+		"Authorization": "Bearer some_token_value",
+		"X-Custom-Header": "MyValue",
+	}
+
+	headers := make(http.Header)
+
+	for key, value := range myHeadersMap {
+		headers.Set(key, value) 
+	}
+
+	token, err := GetBearerToken(headers)
+	if err != nil || token != "some_token_value" {
+		t.Errorf(`GetBearerToken should return some_token_value, nil, not %q, %v`, token, err)
+	}
+}
 
 func TestHashPassword(t *testing.T) {
 	password := "123456"
